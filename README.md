@@ -60,7 +60,7 @@ Built for a hackathon: honest engineering over buzzwords. Design decisions below
 
 ```powershell
 scripts\setup.ps1   # venv + pip install + npm install + model weights
-scripts\dev.ps1     # backend :8000 + frontend :5173
+start.bat           # double-click: backend :8000 + frontend :5173 + opens the app
 ```
 
 ### Manual (any OS)

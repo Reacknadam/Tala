@@ -13,7 +13,7 @@
 - Backend tests: `cd backend && python -m unittest discover -s tests -v`
 - Frontend dev server: `cd frontend && npm run dev` (http://localhost:5173, proxies `/api` → :8000)
 - Frontend build / typecheck: `cd frontend && npm run build`
-- One-shot dev launch: `scripts/dev.ps1` (Windows) or `scripts/dev.sh`
+- One-shot dev launch: `start.bat` (repo root, Windows double-click) or `scripts/dev.ps1` / `scripts/dev.sh`
 
 ## Conventions
 
