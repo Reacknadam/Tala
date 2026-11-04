@@ -1,0 +1,30 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# ---- Node / Vite ----
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# ---- Runtime data (regenerated locally, not committed) ----
+backend/data/*
+!backend/data/.gitkeep
+videos/*
+!videos/.gitkeep
+
+# ---- Oversized model weights ----
+# football_best.pt is ~165 MB (over GitHub's 100 MB file limit).
+# Fetch it with scripts/download_models.py -- see README "Model weights".
+backend/models/football_best.pt
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+*.rar
+.idea/
+.vscode/

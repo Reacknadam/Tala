@@ -1,0 +1,17 @@
+# TALA backend requirements
+# Note: these are installed against a CPU-only PyTorch build. If you have a
+# CUDA-capable GPU and want to use it, install torch/torchvision from
+# https://pytorch.org/get-started/locally/ BEFORE installing the rest.
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+pydantic>=2.7
+
+opencv-python-headless>=4.9
+numpy>=1.26
+
+torch>=2.2
+torchvision>=0.17
+ultralytics>=8.2
+lap>=0.5.12
