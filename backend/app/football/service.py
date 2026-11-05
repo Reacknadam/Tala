@@ -73,7 +73,10 @@ def run_analysis(video_id: str, max_sampled_frames: int = 600, stride: int = 5) 
                 break
             # Every frame: the broadcast camera pans/zooms, so positions are
             # first warped back into the calibration (first-frame) space.
-            compensator.update(frame)
+            to_ref = compensator.update(frame)
+            # ref -> current homography for this frame; stored on sampled
+            # frames so the UI can re-project pitch markings onto the video.
+            ref_to_cur = np.linalg.inv(to_ref)
             # Continuous tracking: ByteTrack needs every frame to keep IDs
             # stable; only the UI output is sub-sampled (stride).
             players, ball = tracker.process_frame(frame)
@@ -82,19 +85,25 @@ def run_analysis(video_id: str, max_sampled_frames: int = 600, stride: int = 5) 
             players_m: dict = {}
             players_px: dict = {}
             for player in players:
-                mapped = pitch.to_pitch(*compensator.transform(*player["foot"]))
+                ref_foot = compensator.transform(*player["foot"])
+                mapped = pitch.to_pitch(*ref_foot)
                 tracks_m.setdefault(player["track_id"], []).append(
                     (frame_idx, mapped[0] if mapped else None, mapped[1] if mapped else None))
                 hue = dominant_hue(frame, player["bbox"])
                 if hue is not None and len(hues.setdefault(player["track_id"], [])) < 30:
                     hues[player["track_id"]].append(hue)
-                if is_sample and mapped is not None:
-                    players_m[player["track_id"]] = mapped
-                    players_px[player["track_id"]] = {"bbox": player["bbox"], "foot": player["foot"]}
+                if is_sample:
+                    # Display positions also accept projected points just
+                    # outside the quad (stats above stay strict).
+                    disp = mapped if mapped is not None else pitch.to_pitch(*ref_foot, strict=False)
+                    if disp is not None:
+                        players_m[player["track_id"]] = disp
+                        players_px[player["track_id"]] = {"bbox": player["bbox"], "foot": player["foot"]}
             if is_sample:
                 sampled.append({
                     "frame": frame_idx, "players_m": players_m, "players_px": players_px,
                     "ball_cur": ({"x": ball["x"], "y": ball["y"], "bbox": ball["bbox"]} if ball else None),
+                    "h": [float(v) for v in ref_to_cur.flatten()],
                 })
                 sampled_count += 1
                 if sampled_count >= max_sampled_frames:
@@ -181,7 +190,8 @@ def run_analysis(video_id: str, max_sampled_frames: int = 600, stride: int = 5) 
 
     result = {
         "video_id": video_id, "fps": fps, "stride": stride, "truncated": truncated,
-        "pitch": {"length": calibration["pitch_length"], "width": calibration["pitch_width"]},
+        "pitch": {"length": calibration["pitch_length"], "width": calibration["pitch_width"],
+                  "to_px": [float(v) for v in pitch.inv_matrix.flatten()]},
         "frames_sampled": sampled_count,
         "players": [{"track_id": tid, "team": teams[tid], "distance_m": s["distance_m"],
                      "mean_speed_kmh": s["mean_speed_kmh"], "max_speed_kmh": s["max_speed_kmh"]}
@@ -202,6 +212,7 @@ def run_analysis(video_id: str, max_sampled_frames: int = 600, stride: int = 5) 
                      if s["ball_m"] else None),
             "owner_team": owners[i],
             "owner_player_id": _owner_player(s),
+            "h": s["h"],
         } for i, s in enumerate(sampled)],
     }
     _path(video_id, "analysis").write_text(json.dumps(result), encoding="utf-8")

@@ -1,11 +1,14 @@
 """Football (pitch intelligence) endpoints."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 
 from app.football import service
+from app.football.field import detect_pitch
 from app.models.schemas import FootballAnalyzeRequest, FootballCalibrationRequest
-from app.services import storage
+from app.services import storage, video as video_service
 
 router = APIRouter()
 
@@ -13,6 +16,23 @@ router = APIRouter()
 def _require_video(video_id: str) -> None:
     if storage.get_video(video_id) is None:
         raise HTTPException(404, "video not found")
+
+
+@router.get("/football/{video_id}/detect_pitch")
+def auto_detect_pitch(video_id: str, frame_number: int = 0):
+    """Recognize the playing field on one frame (default: the first frame,
+    which is also the reference pose calibration must live in)."""
+    row = storage.get_video(video_id)
+    if row is None:
+        raise HTTPException(404, "video not found")
+    frame = video_service.read_frame(Path(row["path"]), frame_number)
+    if frame is None:
+        raise HTTPException(400, "could not read requested frame")
+    found = detect_pitch(frame)
+    if found is None:
+        raise HTTPException(404, "no field recognized on this frame")
+    found["frame_number"] = frame_number
+    return found
 
 
 @router.put("/football/{video_id}/calibration")

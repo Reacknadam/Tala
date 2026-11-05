@@ -4,6 +4,44 @@ import { api } from "../services/api";
 
 const TEAM_FILL: Record<number, string> = { 1: "#d99a3b", 2: "#3fb27f", 0: "#8a919c" };
 
+/** Row-major 3x3 multiply. */
+function matMul(a: number[], b: number[]): number[] {
+  const o = new Array<number>(9);
+  for (let r = 0; r < 3; r++)
+    for (let c = 0; c < 3; c++)
+      o[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+  return o;
+}
+
+/** Apply row-major 3x3 homography to a point; null if behind the plane. */
+function xform(m: number[], x: number, y: number): [number, number] | null {
+  const w = m[6] * x + m[7] * y + m[8];
+  if (Math.abs(w) < 1e-6) return null;
+  return [(m[0] * x + m[1] * y + m[2]) / w, (m[3] * x + m[4] * y + m[5]) / w];
+}
+
+/** Pitch-marking segments in meter space (x along length, y across width). */
+function pitchFeatures(L: number, W: number): [number, number][][] {
+  const feats: [number, number][][] = [
+    [[0, 0], [L, 0], [L, W], [0, W], [0, 0]],
+    [[L / 2, 0], [L / 2, W]],
+  ];
+  const circle: [number, number][] = [];
+  const r = Math.min(9.15, Math.min(L, W) * 0.18);
+  for (let i = 0; i <= 28; i++) {
+    const a = (i / 28) * Math.PI * 2;
+    circle.push([L / 2 + r * Math.cos(a), W / 2 + r * Math.sin(a)]);
+  }
+  feats.push(circle);
+  if (L >= 80 && W >= 50) {
+    feats.push([[0, (W - 40.32) / 2], [16.5, (W - 40.32) / 2], [16.5, (W + 40.32) / 2], [0, (W + 40.32) / 2]]);
+    feats.push([[L, (W - 40.32) / 2], [L - 16.5, (W - 40.32) / 2], [L - 16.5, (W + 40.32) / 2], [L, (W + 40.32) / 2]]);
+    feats.push([[0, (W - 18.32) / 2], [5.5, (W - 18.32) / 2], [5.5, (W + 18.32) / 2], [0, (W + 18.32) / 2]]);
+    feats.push([[L, (W - 18.32) / 2], [L - 5.5, (W - 18.32) / 2], [L - 5.5, (W + 18.32) / 2], [L, (W + 18.32) / 2]]);
+  }
+  return feats;
+}
+
 interface Props {
   video: VideoInfo | null;
   searchMode: boolean;
@@ -16,6 +54,8 @@ interface Props {
   calibrationPoints?: { x: number; y: number }[];
   onCalibrationPoint?: (x: number, y: number) => void;
   footballFrames?: FootballFrame[] | null;
+  footballPitch?: { length: number; width: number; to_px?: number[] } | null;
+  detectedPolygon?: number[][] | null;
 }
 
 /** Renders the active camera's video with a canvas overlay used for the
@@ -24,7 +64,7 @@ interface Props {
  * converts between the video's *displayed* CSS size and its native pixel
  * resolution, because bounding boxes from the backend are always in native
  * video coordinates. */
-export function VideoStage({ video, searchMode, onSelect, selection, highlightBox, jumpFlash, videoRef, calibrationMode = false, calibrationPoints = [], onCalibrationPoint, footballFrames = null }: Props) {
+export function VideoStage({ video, searchMode, onSelect, selection, highlightBox, jumpFlash, videoRef, calibrationMode = false, calibrationPoints = [], onCalibrationPoint, footballFrames = null, footballPitch = null, detectedPolygon = null }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
@@ -58,7 +98,32 @@ export function VideoStage({ video, searchMode, onSelect, selection, highlightBo
     if (selection) drawBox(selection, "#4b8bf4");
     if (highlightBox) drawBox(highlightBox, "#3fb27f");
 
+    // Region recognized by auto-detect: translucent fill + outline.
+    if (detectedPolygon && detectedPolygon.length >= 3) {
+      ctx.beginPath();
+      detectedPolygon.forEach(([x, y], i) => {
+        if (i === 0) ctx.moveTo(x * scaleX, y * scaleY);
+        else ctx.lineTo(x * scaleX, y * scaleY);
+      });
+      ctx.closePath();
+      ctx.fillStyle = "rgba(63, 178, 127, 0.15)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(63, 178, 127, 0.7)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
     if (calibrationPoints.length > 0) {
+      if (calibrationPoints.length === 4) {
+        ctx.beginPath();
+        calibrationPoints.forEach((p, i) => {
+          if (i === 0) ctx.moveTo(p.x * scaleX, p.y * scaleY);
+          else ctx.lineTo(p.x * scaleX, p.y * scaleY);
+        });
+        ctx.closePath();
+        ctx.fillStyle = "rgba(217, 154, 59, 0.10)";
+        ctx.fill();
+      }
       ctx.strokeStyle = "#d99a3b";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -89,6 +154,32 @@ export function VideoStage({ video, searchMode, onSelect, selection, highlightBo
       const span = Math.max(1e-6, b.t_sec - a.t_sec);
       const k = b === a ? 0 : Math.min(1, Math.max(0, (t - a.t_sec) / span));
       const lerp = (u: number, v: number) => u + (v - u) * k;
+
+      // AR pitch markings: re-project pitch-space lines into the current
+      // frame via the stored ref->current homography, so lines stay glued
+      // to the grass while the broadcast camera pans/zooms.
+      const hRef = a.h && b.h ? a.h.map((v, j) => lerp(v, b.h![j])) : a.h;
+      if (footballPitch?.to_px && hRef) {
+        const m = matMul(hRef, footballPitch.to_px);
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.75)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 5]);
+        for (const feat of pitchFeatures(footballPitch.length, footballPitch.width)) {
+          ctx.beginPath();
+          let started = false;
+          for (const [x, y] of feat) {
+            const p = xform(m, x, y);
+            if (!p) { started = false; continue; }
+            const cx = p[0] * scaleX, cy = p[1] * scaleY;
+            if (!started) { ctx.moveTo(cx, cy); started = true; }
+            else ctx.lineTo(cx, cy);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
       const byId = new Map(b.players.map((p) => [p.id, p]));
       for (const p of a.players) {
         if (!p.bbox_px || !p.foot_px) continue; // pre-overlay analysis format
@@ -116,7 +207,7 @@ export function VideoStage({ video, searchMode, onSelect, selection, highlightBo
         ctx.font = "11px sans-serif";
         ctx.lineWidth = 3;
         ctx.strokeStyle = "rgba(0,0,0,0.7)";
-        const label = `${speed.toFixed(1)} km/h`;
+        const label = `${Math.round(speed)} km/h`;
         ctx.strokeText(label, cx, cy + 30);
         ctx.fillStyle = "#fff";
         ctx.fillText(label, cx, cy + 30);

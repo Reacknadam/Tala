@@ -69,6 +69,8 @@ export interface FootballFrame {
   ball: { x: number; y: number; px: [number, number] | null; bbox_px: [number, number, number, number] | null } | null;
   owner_team: number | null;
   owner_player_id: number | null;
+  /** Row-major 3x3 homography: calibration-space px -> this frame's px (AR overlay). */
+  h?: number[];
 }
 
 export interface FootballAnalysis {
@@ -76,7 +78,7 @@ export interface FootballAnalysis {
   fps: number;
   stride: number;
   truncated: boolean;
-  pitch?: { length: number; width: number };
+  pitch?: { length: number; width: number; to_px?: number[] };
   frames_sampled: number;
   players: FootballPlayerStat[];
   possession: { shares: Record<string, number>; segments: { team: number; start_frame: number; end_frame: number }[] };
@@ -136,16 +138,22 @@ export const api = {
     return `${BASE}/videos/${videoId}/stream`;
   },
 
-  getFootballCalibration(videoId: string): Promise<{ points: number[][] } | null> {
+  getFootballCalibration(videoId: string): Promise<{ points: number[][]; pitch_length?: number; pitch_width?: number } | null> {
     return fetch(`${BASE}/football/${videoId}/calibration`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
   },
 
-  saveFootballCalibration(videoId: string, points: { x: number; y: number }[]): Promise<unknown> {
+  saveFootballCalibration(videoId: string, points: { x: number; y: number }[], pitchLength = 105, pitchWidth = 68): Promise<unknown> {
     return fetch(`${BASE}/football/${videoId}/calibration`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ points }),
+      body: JSON.stringify({ points, pitch_length: pitchLength, pitch_width: pitchWidth }),
     }).then((r) => asJson(r));
+  },
+
+  detectPitch(videoId: string, frameNumber = 0): Promise<{ points: number[][]; polygon: number[][]; frame_number: number } | null> {
+    return fetch(`${BASE}/football/${videoId}/detect_pitch?frame_number=${frameNumber}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
   },
 
   analyzeFootball(videoId: string): Promise<{ frames_available: number }> {

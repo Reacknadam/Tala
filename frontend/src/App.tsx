@@ -18,6 +18,7 @@ export default function App() {
   const [calibrationPoints, setCalibrationPoints] = useState<{ x: number; y: number }[]>([]);
   const [calibrating, setCalibrating] = useState(false);
   const [analysis, setAnalysis] = useState<FootballAnalysis | null>(null);
+  const [detectedPolygon, setDetectedPolygon] = useState<number[][] | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   // Load videos on mount
@@ -41,6 +42,7 @@ export default function App() {
     setCalibrationPoints([]);
     setCalibrating(false);
     setAnalysis(null);
+    setDetectedPolygon(null);
   };
 
   const handleSelect = (bbox: BoundingBox, frameNumber: number) => {
@@ -142,6 +144,8 @@ export default function App() {
               calibrationMode={mode === "football" && calibrating}
               calibrationPoints={calibrationPoints}
               footballFrames={mode === "football" ? analysis?.frames ?? null : null}
+              footballPitch={mode === "football" ? analysis?.pitch ?? null : null}
+              detectedPolygon={detectedPolygon}
               onCalibrationPoint={(x, y) =>
                 setCalibrationPoints((prev) => (prev.length >= 4 ? [{ x, y }] : [...prev, { x, y }]))
               }
@@ -171,6 +175,8 @@ export default function App() {
               onToggleCalibrating={() => setCalibrating(!calibrating)}
               analysis={analysis}
               onAnalysis={setAnalysis}
+              detectedPolygon={detectedPolygon}
+              onDetectedPolygon={setDetectedPolygon}
             />
           )}
         </div>

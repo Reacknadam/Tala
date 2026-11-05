@@ -153,10 +153,15 @@ class FootballTracker:
 
 
 def dominant_hue(frame: np.ndarray, bbox: Tuple[float, float, float, float]) -> Optional[float]:
-    """Peak saturation-weighted hue (degrees) of the torso band, or None."""
+    """Peak saturation-weighted hue (degrees) of the torso band, or None.
+
+    Only the central ~44% of the bbox width is sampled: near the edges the
+    crop is mostly grass, which swamps the jersey signal and collapses the
+    two-team clustering (everyone ends up "team green")."""
     x1, y1, x2, y2 = (int(v) for v in bbox)
     h, w = frame.shape[:2]
-    x1, x2 = max(0, x1), min(w, x2)
+    cx, half = (x1 + x2) // 2, max(2, int((x2 - x1) * 0.22))
+    x1, x2 = max(0, cx - half), min(w, cx + half)
     top, bottom = max(0, int(y1 + 0.15 * (y2 - y1))), min(h, int(y1 + 0.55 * (y2 - y1)))
     if x2 <= x1 or bottom <= top:
         return None

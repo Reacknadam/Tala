@@ -38,14 +38,23 @@ class PitchMapping:
         self.matrix = cv2.getPerspectiveTransform(pts, target)
         if not np.isfinite(self.matrix).all() or abs(np.linalg.det(self.matrix)) < 1e-12:
             raise ValueError("degenerate pitch quad (singular homography)")
+        # pitch -> pixel: lets the UI re-project pitch markings onto the
+        # video (AR overlay) and lets callers map off-quad positions.
+        self.inv_matrix = np.linalg.inv(self.matrix)
 
-    def to_pitch(self, x: float, y: float) -> Optional[Tuple[float, float]]:
-        """Map one image point to meters, or None when outside the quad."""
-        inside = cv2.pointPolygonTest(self.pixel_points, (float(x), float(y)), False)
-        if inside < 0:
+    def to_pitch(self, x: float, y: float, strict: bool = True) -> Optional[Tuple[float, float]]:
+        """Map one image point to meters, or None when outside the quad
+        (strict=False keeps the projected value for display purposes)."""
+        if strict and cv2.pointPolygonTest(self.pixel_points, (float(x), float(y)), False) < 0:
             return None
         point = np.array([[[x, y]]], dtype=np.float32)
         mapped = cv2.perspectiveTransform(point, self.matrix)[0, 0]
+        return float(mapped[0]), float(mapped[1])
+
+    def to_pixel(self, x: float, y: float) -> Tuple[float, float]:
+        """Inverse map: pitch meters -> calibration-space pixel."""
+        point = np.array([[[x, y]]], dtype=np.float32)
+        mapped = cv2.perspectiveTransform(point, self.inv_matrix)[0, 0]
         return float(mapped[0]), float(mapped[1])
 
     def map_points(self, points: Sequence[Tuple[float, float]]) -> List[Optional[Tuple[float, float]]]:

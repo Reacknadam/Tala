@@ -10,22 +10,31 @@ interface Props {
   onToggleCalibrating: () => void;
   analysis: FootballAnalysis | null;
   onAnalysis: (analysis: FootballAnalysis | null) => void;
+  detectedPolygon: number[][] | null;
+  onDetectedPolygon: (poly: number[][] | null) => void;
 }
 
 const TEAM_FILL: Record<number, string> = { 1: "#d99a3b", 2: "#3fb27f", 0: "#8a919c" };
 
-/** Football mode: pitch calibration, 2D tactical view synced to playback,
- * possession shares and per-player distance/speed. All positions are in
- * meters on a 105x68 pitch (see backend/app/football). */
-export function FootballPanel({ video, videoRef, calibrationPoints, onCalibrationPointsChange, calibrating, onToggleCalibrating, analysis, onAnalysis }: Props) {
+/** Football mode: pitch calibration (manual clicks or automatic field
+ * recognition), 2D tactical view synced to playback, possession shares and
+ * per-player distance/speed. Positions are in meters; calibration lives in
+ * the *first frame's* pose (the analysis reference). */
+export function FootballPanel({ video, videoRef, calibrationPoints, onCalibrationPointsChange, calibrating, onToggleCalibrating, analysis, onAnalysis, detectedPolygon, onDetectedPolygon }: Props) {
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(0);
+  const [pitchLength, setPitchLength] = useState(105);
+  const [pitchWidth, setPitchWidth] = useState(68);
 
   useEffect(() => {
     if (!video) return;
     api.getFootballCalibration(video.video_id).then((cal) => {
-      if (cal) onCalibrationPointsChange(cal.points.map(([x, y]) => ({ x, y })));
+      if (cal) {
+        onCalibrationPointsChange(cal.points.map(([x, y]) => ({ x, y })));
+        if (cal.pitch_length) setPitchLength(cal.pitch_length);
+        if (cal.pitch_width) setPitchWidth(cal.pitch_width);
+      }
     });
     api.getFootballAnalysis(video.video_id).then(onAnalysis);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -41,13 +50,34 @@ export function FootballPanel({ video, videoRef, calibrationPoints, onCalibratio
   const fullFrame = () => {
     const w = video.width - 16;
     const h = video.height - 16;
+    onDetectedPolygon(null);
     onCalibrationPointsChange([{ x: 8, y: h }, { x: 8, y: 8 }, { x: w, y: 8 }, { x: w, y: h }]);
+  };
+
+  const detect = async () => {
+    setBusy(true);
+    setStatus("Recognizing the field on the first frame…");
+    try {
+      // Calibration lives in the first frame's pose: seek there so the
+      // overlayed result is exactly what was detected.
+      if (videoRef.current) videoRef.current.currentTime = 0;
+      const found = await api.detectPitch(video.video_id, 0);
+      if (!found) {
+        setStatus("No field recognized — try calibrating manually.");
+        return;
+      }
+      onDetectedPolygon(found.polygon);
+      onCalibrationPointsChange(found.points.map(([x, y]) => ({ x, y })));
+      setStatus("Field recognized. Adjust corners or dimensions if needed, then save.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const save = async () => {
     setBusy(true);
     try {
-      await api.saveFootballCalibration(video.video_id, calibrationPoints);
+      await api.saveFootballCalibration(video.video_id, calibrationPoints, pitchLength, pitchWidth);
       setStatus("Calibration saved. You can run the analysis.");
     } catch (err) {
       setStatus(`Calibration failed: ${(err as Error).message}`);
@@ -74,6 +104,14 @@ export function FootballPanel({ video, videoRef, calibrationPoints, onCalibratio
   const shares = analysis?.possession.shares ?? {};
   const pitchL = analysis?.pitch?.length ?? 105;
   const pitchW = analysis?.pitch?.width ?? 68;
+  // Always render the pitch horizontally: transpose coords when the
+  // calibrated region is taller than it is long (e.g. a touchline-to-
+  // touchline strip is legitimately W > L).
+  const rot = pitchW > pitchL;
+  const H = Math.max(pitchL, pitchW);
+  const V = Math.min(pitchL, pitchW);
+  const pt = (x: number, y: number): [number, number] => (rot ? [y, x] : [x, y]);
+  const fullSize = H >= 80 && V >= 50;
 
   return (
     <div className="football-panel">
@@ -82,11 +120,18 @@ export function FootballPanel({ video, videoRef, calibrationPoints, onCalibratio
         <button className={calibrating ? "on" : ""} onClick={onToggleCalibrating}>
           {calibrating ? "Clicking pitch corners…" : "Calibrate pitch"}
         </button>
+        <button disabled={busy} onClick={detect}>Auto-detect pitch</button>
         <span className="panel-hint">
           {calibrationPoints.length}/4 corners (order: near-left, far-left, far-right, near-right)
         </span>
+        <label className="pitch-dims">
+          L <input type="number" value={pitchLength} min={10} max={120} onChange={(e) => setPitchLength(+e.target.value || 105)} /> m
+        </label>
+        <label className="pitch-dims">
+          W <input type="number" value={pitchWidth} min={10} max={90} onChange={(e) => setPitchWidth(+e.target.value || 68)} /> m
+        </label>
         <button onClick={fullFrame}>Full-frame pitch</button>
-        <button onClick={() => onCalibrationPointsChange([])}>Clear</button>
+        <button onClick={() => { onCalibrationPointsChange([]); onDetectedPolygon(null); }}>Clear</button>
         <button disabled={busy || calibrationPoints.length !== 4} onClick={save}>Save calibration</button>
         <button className="primary" disabled={busy} onClick={run}>{busy ? "Working…" : "Analyse match"}</button>
         {status && <span className="panel-hint">{status}</span>}
@@ -94,25 +139,28 @@ export function FootballPanel({ video, videoRef, calibrationPoints, onCalibratio
 
       {analysis && frame && (
         <div className="football-grid">
-          <svg className="pitch" viewBox={`0 0 ${pitchL} ${pitchW}`} role="img" aria-label="Tactical pitch view">
-            <rect x="0" y="0" width={pitchL} height={pitchW} className="pitch-bg" />
-            <line x1={pitchL / 2} y1="0" x2={pitchL / 2} y2={pitchW} className="pitch-line" />
-            <circle cx={pitchL / 2} cy={pitchW / 2} r={Math.min(9.15, pitchL * 0.12)} className="pitch-line" fill="none" />
-            {pitchL > 60 && (
+          <svg className="pitch" viewBox={`-3 -3 ${H + 6} ${V + 6}`} role="img" aria-label="Tactical pitch view">
+            <rect x="0" y="0" width={H} height={V} className="pitch-bg" />
+            <line x1={H / 2} y1="0" x2={H / 2} y2={V} className="pitch-line" />
+            <circle cx={H / 2} cy={V / 2} r={Math.min(9.15, V * 0.18)} className="pitch-line" fill="none" />
+            {fullSize && (
               <>
-                <rect x="0" y="13.84" width="16.5" height="40.32" className="pitch-line" fill="none" />
-                <rect x={pitchL - 16.5} y="13.84" width="16.5" height="40.32" className="pitch-line" fill="none" />
-                <rect x="0" y="24.84" width="5.5" height="18.32" className="pitch-line" fill="none" />
-                <rect x={pitchL - 5.5} y="24.84" width="5.5" height="18.32" className="pitch-line" fill="none" />
+                <rect x="0" y={(V - 40.32) / 2} width="16.5" height="40.32" className="pitch-line" fill="none" />
+                <rect x={H - 16.5} y={(V - 40.32) / 2} width="16.5" height="40.32" className="pitch-line" fill="none" />
+                <rect x="0" y={(V - 18.32) / 2} width="5.5" height="18.32" className="pitch-line" fill="none" />
+                <rect x={H - 5.5} y={(V - 18.32) / 2} width="5.5" height="18.32" className="pitch-line" fill="none" />
               </>
             )}
-            {frame.players.map((p) => (
-              <g key={p.id}>
-                <circle cx={p.x} cy={p.y} r="1.3" fill={TEAM_FILL[p.team] ?? TEAM_FILL[0]} stroke="#0a0b0d" strokeWidth="0.3" />
-                <text x={p.x + 1.6} y={p.y + 0.8} className="pitch-id">{p.id}</text>
-              </g>
-            ))}
-            {frame.ball && <circle cx={frame.ball.x} cy={frame.ball.y} r="0.9" fill="#fff" stroke="#0a0b0d" strokeWidth="0.3" />}
+            {frame.players.map((p) => {
+              const [px, py] = pt(p.x, p.y);
+              return (
+                <g key={p.id}>
+                  <circle cx={px} cy={py} r="1.3" fill={TEAM_FILL[p.team] ?? TEAM_FILL[0]} stroke="#0a0b0d" strokeWidth="0.3" />
+                  <text x={px + 1.6} y={py + 0.8} className="pitch-id">{p.id}</text>
+                </g>
+              );
+            })}
+            {frame.ball && (() => { const [bx, by] = pt(frame.ball!.x, frame.ball!.y); return <circle cx={bx} cy={by} r="0.9" fill="#fff" stroke="#0a0b0d" strokeWidth="0.3" />; })()}
           </svg>
 
           <div className="football-stats">

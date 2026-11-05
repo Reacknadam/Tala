@@ -19,8 +19,9 @@ Built for a hackathon: honest engineering over buzzwords. Design decisions below
 
 ### 2. Football — pitch-mapped analytics
 
-- Click the 4 pitch corners once (calibration is per-video, in meters — default FIFA 105×68)
+- **Auto-detect pitch** recognizes the field automatically (HSV grass segmentation → largest region → 4 ordered corners); manual 4-corner click calibration stays available (per-video, in meters — default FIFA 105×68)
 - Analysis warps every frame back into calibration space via Lucas-Kanade feature tracking + RANSAC homography (handles pan/tilt/zoom), maps player feet and ball to meters
+- **AR overlay**: pitch markings (boundary, halfway line, center circle, boxes) are re-projected onto the footage through the per-frame homography and stay glued to the grass while the camera moves
 - Output: 2D pitch replay overlay, per-player distance & speed (median-smoothed, teleport-filtered), deterministic team assignment by jersey hue, possession timeline with hysteresis, sprint events
 - Uses a fine-tuned detector (`football_best.pt`, ball/player/goalkeeper/referee) when present; falls back to COCO weights
 
@@ -94,7 +95,7 @@ npm run dev                                        # http://localhost:5173
 
 1. `npm run dev` → open http://localhost:5173
 2. **Search mode:** upload 2+ videos with different `camera_id`s → Index each → toggle *Search Mode* → pause on a frame, click a detected person (or drag a box) → *Search* → click any match to teleport to that moment in the other camera.
-3. **Football mode:** open a broadcast clip → *Calibrate* → click the 4 pitch corners (near-left, far-left, far-right, near-right) → *Analyze* → watch the 2D pitch replay with per-player speed, distance, teams and possession.
+3. **Football mode:** open a broadcast clip → *Auto-detect pitch* (or *Calibrate* + click the 4 corners: near-left, far-left, far-right, near-right) → adjust dimensions if the visible region isn't the full pitch → *Save calibration* → *Analyse match* → watch the 2D pitch replay with per-player speed, distance, teams and possession, plus the AR line overlay on the footage.
    - Sample broadcast clip: [public sample video](https://drive.google.com/file/d/1t6agoqggZKx6thamUuPAIdN_1zR9v9S_/view) (the `08fd33_4` footage).
 
 ## API overview
@@ -112,6 +113,7 @@ npm run dev                                        # http://localhost:5173
 | `POST` | `/api/search` | cross-camera re-id search |
 | `GET` | `/api/matches/{match_id}` | re-fetch one detection |
 | `PUT/GET` | `/api/football/{id}/calibration` | save / load 4-point pitch calibration |
+| `GET` | `/api/football/{id}/detect_pitch` | auto-recognize the field on a frame |
 | `POST` | `/api/football/{id}/analyze` | run analysis (`max_sampled_frames`, `stride`) |
 | `GET` | `/api/football/{id}/analysis` | stored analysis result |
 
